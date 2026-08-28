@@ -1,0 +1,43 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# dbt
+target/
+dbt_packages/
+logs/
+
+# Airflow
+airflow/logs/
+airflow/__pycache__/
+
+# Kafka
+kafka/data/
+
+# Temporary files
+*.tmp
+*.log
+
+# Credentials
+*.pem
+*.key
+credentials/
+secrets/
+
+# Local dataset
+data/
