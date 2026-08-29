@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: stg_transactions
+    description: "Cleaned transaction-level data sourced from the raw transactions table."
+
+    columns:
+      - name: step
+        description: "Time step associated with the transaction."
+        data_tests:
+          - not_null
+
+      - name: type
+        description: "Type of transaction, such as PAYMENT, DEBIT, CASH_OUT, or TRANSFER."
+        data_tests:
+          - not_null
+
+      - name: amount
+        description: "Transaction amount."
+        data_tests:
+          - not_null
+
+      - name: nameOrig
+        description: "Identifier of the originating customer."
+        data_tests:
+          - not_null
+
+      - name: oldbalanceOrg
+        description: "Originating customer's balance before the transaction."
+
+      - name: newbalanceOrig
+        description: "Originating customer's balance after the transaction."
+
+      - name: nameDest
+        description: "Identifier of the destination account."
+
+      - name: oldbalanceDest
+        description: "Destination account balance before the transaction."
+
+      - name: newbalanceDest
+        description: "Destination account balance after the transaction."
+
+      - name: isFraud
+        description: "Fraud indicator where 1 represents a fraudulent transaction and 0 represents a legitimate transaction."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]
+
+      - name: isFlaggedFraud
+        description: "Indicator showing whether the transaction was flagged as fraudulent."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1]

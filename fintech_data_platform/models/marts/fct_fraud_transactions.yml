@@ -1,0 +1,47 @@
+version: 2
+
+models:
+  - name: fct_fraud_transactions
+    description: "Aggregated fraud analytics by transaction type, fraud status, and transaction amount category."
+
+    columns:
+      - name: type
+        description: "Transaction type."
+        data_tests:
+          - not_null
+
+      - name: fraud_status
+        description: "Classification of the transaction as FRAUD or LEGITIMATE."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["FRAUD", "LEGITIMATE"]
+
+      - name: transaction_amount_category
+        description: "Transaction amount classification as LOW, MEDIUM, or HIGH."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["LOW", "MEDIUM", "HIGH"]
+
+      - name: transaction_count
+        description: "Number of transactions in the grouping."
+        data_tests:
+          - not_null
+
+      - name: total_amount
+        description: "Total transaction amount for the grouping."
+        data_tests:
+          - not_null
+
+      - name: average_amount
+        description: "Average transaction amount for the grouping."
+        data_tests:
+          - not_null
+
+      - name: total_fraud_amount
+        description: "Total amount associated with fraudulent transactions in the grouping."
+        data_tests:
+          - not_null

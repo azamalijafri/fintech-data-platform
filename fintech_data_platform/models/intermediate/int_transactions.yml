@@ -1,0 +1,45 @@
+version: 2
+
+models:
+  - name: int_transactions
+    description: "Transaction-level intermediate model containing derived fraud status and transaction amount categories."
+
+    columns:
+      - name: step
+        description: "Time step associated with the transaction."
+
+      - name: type
+        description: "Type of transaction."
+
+      - name: amount
+        description: "Transaction amount."
+
+      - name: nameOrig
+        description: "Identifier of the originating customer."
+
+      - name: oldbalanceOrg
+        description: "Originating customer's balance before the transaction."
+
+      - name: newbalanceOrig
+        description: "Originating customer's balance after the transaction."
+
+      - name: nameDest
+        description: "Identifier of the destination account."
+
+      - name: oldbalanceDest
+        description: "Destination account balance before the transaction."
+
+      - name: newbalanceDest
+        description: "Destination account balance after the transaction."
+
+      - name: isFraud
+        description: "Fraud indicator where 1 represents a fraudulent transaction and 0 represents a legitimate transaction."
+
+      - name: isFlaggedFraud
+        description: "Indicator showing whether the transaction was flagged as fraudulent."
+
+      - name: fraud_status
+        description: "Business-friendly fraud classification derived from isFraud."
+
+      - name: transaction_amount_category
+        description: "Transaction amount classification based on configured amount thresholds."
