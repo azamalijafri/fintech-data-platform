@@ -39,11 +39,10 @@ fintech-data-platform/
 Docker Compose
      │
      ├── airflow-scheduler   (reads DAGs, schedules task instances)
-     ├── airflow-webserver   (UI: DAGs, runs, logs, task state)
-     ├── airflow-worker      (executes tasks — Celery executor)
-     ├── airflow-triggerer
+     ├── airflow-api-server  (FastAPI server: UI + Execution API, port 8080)
+     ├── airflow-dag-processor (parses / serializes DAG files)
      ├── postgres            (Airflow metadata: DAG runs, task state)
-     └── redis                (Celery message broker)
+     └── airflow-init        (one-time DB migration, exits)
               │
               ▼
     fintech_dbt_pipeline.py  (DAG, schedule = */5 * * * *)
@@ -68,30 +67,28 @@ Important distinction to keep straight when documenting or discussing this: **Do
 
 ## 1. Docker Layer
 
-Airflow is containerized via Docker Compose rather than installed directly on the host — the standard approach for local Airflow development, splitting the scheduler, webserver, worker, metadata DB, and broker into separate services.
+Airflow is containerized via Docker Compose rather than installed directly on the host — the standard approach for local Airflow development. The stack runs the Airflow 3 scheduler, a FastAPI api-server (which hosts both the UI and the Execution API used by task execution clients), a dag-processor, and a Postgres metadata DB, all tied together by a shared `AIRFLOW__API_AUTH__JWT_SECRET`.
 
-| Service             | Responsibility                                                                   |
-| ------------------- | -------------------------------------------------------------------------------- |
-| `airflow-scheduler` | Reads DAG definitions, checks dependencies, creates and schedules task instances |
-| `airflow-webserver` | Serves the Airflow UI (DAGs, task logs, run history, schedules)                  |
-| `airflow-worker`    | Executes tasks assigned by the scheduler (Celery executor)                       |
-| `airflow-triggerer` | Handles deferrable/async tasks                                                   |
-| `postgres`          | Airflow metadata store (DAG runs, task instances, task state)                    |
-| `redis`             | Message broker for the Celery executor                                           |
-| `airflow-init`      | One-time DB migration + initial user creation                                    |
+| Service                | Responsibility                                                                   |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| `airflow-scheduler`    | Reads DAG definitions, checks dependencies, creates and schedules task instances |
+| `airflow-api-server`   | FastAPI server exposing the UI + Execution API on port `8080`                    |
+| `airflow-dag-processor`| Parses / serializes DAG files for the scheduler                                  |
+| `postgres`             | Airflow metadata store (DAG runs, task instances, task state)                    |
+| `airflow-init`         | One-time DB migration (exits after completing)                                   |
 
 **Start the environment:**
 
 ```bash
 cd ~/Projects/fintech-data-platform
-docker compose -f airflow/docker-compose.yml up -d
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate up -d
 ```
 
 **Run Airflow CLI commands** (Airflow lives inside the container, so every CLI call is prefixed accordingly):
 
 ```bash
-docker compose -f airflow/docker-compose.yml exec airflow-scheduler \
-  airflow dags list
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  exec airflow-scheduler airflow dags list
 ```
 
 The actual command is `airflow dags list` — the Docker prefix is just how you reach it.
@@ -222,8 +219,8 @@ airflow dags list-runs fintech_dbt_pipeline
 
 ```bash
 # Confirm the DAG was parsed with no import errors
-docker compose -f airflow/docker-compose.yml exec airflow-scheduler \
-  airflow dags list | grep fintech_dbt_pipeline
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  exec airflow-scheduler airflow dags list | grep fintech_dbt_pipeline
 
 # Full DAG config: schedule, pause state, owners, import errors
 airflow dags details fintech_dbt_pipeline
@@ -246,7 +243,7 @@ timetable_summary | */5 * * * *
 Independently verifying dbt (outside Airflow) before wiring it into the DAG:
 
 ```bash
-cd dbt && dbt build --profiles-dir /opt/airflow/dbt
+cd dbt && dbt build --profiles-dir .
 ```
 
 Result once fixed: `PASS=20 WARN=0 ERROR=0 SKIP=0 TOTAL=20` (3 table models + 17 tests).

@@ -2,10 +2,13 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
-COPY kafka/consumer/requirements.txt .
-
+COPY services/ingest/consumer/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY kafka/consumer/consumer.py .
+COPY pyproject.toml .
+COPY src/ src/
+RUN pip install --no-cache-dir --no-deps .
+
+COPY services/ingest/consumer/consumer.py .
 
 CMD ["python", "-u", "consumer.py"]

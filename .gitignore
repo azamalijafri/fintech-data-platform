@@ -9,6 +9,9 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # IDE
 .vscode/
@@ -18,13 +21,14 @@ venv/
 .DS_Store
 
 # dbt
-target/
-dbt_packages/
-logs/
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
 
 # Airflow
-airflow/logs/
-airflow/__pycache__/
+services/orchestrator/logs/
+services/orchestrator/__pycache__/
 
 # Kafka
 kafka/data/

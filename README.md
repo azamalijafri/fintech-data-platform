@@ -1,354 +1,267 @@
+# FinTech Data Platform
 
-# Architecture
+A local FinTech data engineering project that streams synthetic financial transactions through Kafka into Amazon S3, auto-loads them into Snowflake via Snowpipe, transforms them with dbt into analytics-ready marts, and orchestrates the pipeline with Apache Airflow.
 
-## High-Level Flow
+## Architecture
 
-Data Producer
-    |
-    | JSONL transaction files
-    v
-Amazon S3
-    |
-    | Stores raw transaction files
-    |
-    +---------------------> S3 Event Notification
-                                  |
-                                  | ObjectCreated event
-                                  v
-                              Amazon SNS
-                                  |
-                                  | Notification
-                                  v
-                            Snowpipe
-                                  |
-                                  | COPY INTO transformation
-                                  v
-                       Snowflake RAW.TRANSACTIONS
+The platform is split into distinct layers, each owning a single responsibility:
 
+| Layer | Component | Responsibility |
+| ----- | --------- | -------------- |
+| Ingest | Kafka producer | Reads the PaySim CSV and streams JSON transaction events to a Kafka topic |
+| Ingest | Kafka consumer | Consumes events, batches them, and uploads JSONL files to S3 |
+| Store | Amazon S3 | Raw landing zone under `raw/transactions/{YYYY}/{MM}/{DD}/{HH}/batch-*.jsonl` |
+| Notify | S3 → SNS | Emits an `ObjectCreated` event on new files and delivers it via SNS |
+| Load | Snowpipe | Auto-ingests new S3 files into `RAW.TRANSACTIONS` (event-driven, `AUTO_INGEST=TRUE`) |
+| Transform | dbt | Builds and tests `stg → int → fct` models in Snowflake |
+| Orchestrate | Airflow | Schedules, triggers, retries, and monitors the dbt workflow |
 
-## Component Responsibilities
+**Key boundary:** Kafka only handles streaming/buffering. S3 is the raw store. Snowpipe handles automatic S3→RAW loading. dbt owns the transformation and data-quality layer. Airflow is purely orchestration on top — it has no awareness of the raw data journey; it simply runs `dbt build` on a cadence and reports success or failure.
 
-### 1. Data Producer
+## Repository layout
 
-The data producer generates transaction events in JSONL format.
+```
+fintech-data-platform/
+│
+├── src/
+│   └── fintech/                       # shared Python package (config + event schema)
+│       ├── config.py                  # env-driven configuration helpers
+│       ├── events.py                  # canonical event envelope builder
+│       └── __init__.py
+│
+├── services/
+│   ├── ingest/
+│   │   ├── producer/                  # PaySim CSV → Kafka topic (Dockerfile, producer.py)
+│   │   └── consumer/                  # Kafka → batched JSONL upload to S3 (Dockerfile, consumer.py)
+│   └── orchestrator/                  # Apache Airflow 3
+│       ├── Dockerfile                 # apache/airflow:3.0.6 + dbt-core + dbt-snowflake
+│       ├── dags/
+│       │   └── fintech_dbt_pipeline.py
+│       ├── plugins/
+│       │   └── fintech/tasks.py
+│       └── logs/
+│
+├── dbt/                               # dbt project (transformation logic)
+│   ├── dbt_project.yml
+│   ├── profiles.yml                   # Snowflake connection (env-var driven)
+│   ├── models/
+│   │   ├── staging/                   # stg_transactions (+ data tests)
+│   │   ├── intermediate/              # int_transactions
+│   │   └── marts/                     # fct_fraud_transactions
+│   └── macros/generate_schema_name.sql
+│
+├── infra/
+│   └── docker/
+│       └── docker-compose.yml         # single platform stack (ingest + orchestration)
+│
+├── docs/
+│   ├── orchestration/airflow.md
+│   ├── ingestion/kafka.md
+│   └── cloud/
+│       ├── s3-snowflake-storage-integration.md
+│       └── snowpipe-notification-integration.md
+│
+├── scripts/                           # helper scripts
+├── tests/                             # test suite
+├── data/
+│   └── paysim-dataset.csv             # local source dataset (gitignored)
+│
+├── Makefile                           # common dev tasks
+├── pyproject.toml                     # shared Python package definition
+├── .python-version
+├── .github/workflows/ci.yml
+└── .env.example
+```
 
-Each line represents one transaction.
+## Prerequisites
 
-Example:
+- Docker and Docker Compose
+- An external Docker network named `fintech-network`
+- AWS credentials (for S3 reads/writes from the consumer)
+- A Snowflake account with a configured S3 storage integration and Snowpipe
+- Python 3.14 (only needed for local dbt / script runs)
 
-{
-    "event_id": "...",
-    "event_timestamp": "...",
-    "step": 2,
-    "type": "PAYMENT",
-    "amount": 2500.00,
+## Configuration
+
+Copy `.env.example` to `.env` and fill in your values. `.env` is gitignored and injected into containers via `env_file`.
+
+```bash
+# AWS
+AWS_REGION=ap-south-1
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+
+# Snowflake
+SNOWFLAKE_ACCOUNT=
+SNOWFLAKE_USER=
+SNOWFLAKE_PASSWORD=
+SNOWFLAKE_ROLE=
+SNOWFLAKE_WAREHOUSE=
+SNOWFLAKE_DATABASE=FINTECH
+SNOWFLAKE_SCHEMA=RAW
+
+# Kafka
+KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+KAFKA_TOPIC=financial-transactions
+KAFKA_CONSUMER_GROUP=transaction-consumer-group
+
+# S3
+S3_BUCKET=fintech-data-platform-azam-2026
+S3_PREFIX=raw/transactions
+
+# PaySim
+PAYSIM_FILE=/data/paysim-dataset.csv
+```
+
+## Getting started
+
+The whole platform is defined in a single compose file at `infra/docker/docker-compose.yml`. The Airflow (orchestration) services sit behind the `orchestrate` compose profile, so you can run the ingest stack and the orchestration stack together or independently.
+
+### 1. Create the shared network
+
+```bash
+docker network create fintech-network
+```
+
+### 2. Start the platform
+
+Everything (ingest + Airflow):
+
+```bash
+cd ~/Projects/fintech-data-platform
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate up -d
+```
+
+Ingest only (Kafka, producer, consumer):
+
+```bash
+docker compose -f infra/docker/docker-compose.yml up -d
+```
+
+Payload-oriented containers:
+
+| Container | Purpose |
+| --------- | ------- |
+| `fintech-kafka` | Kafka broker |
+| `fintech-producer` | Streams PaySim events to the topic on startup |
+| `fintech-consumer` | Subscribes, batches events, and uploads JSONL to S3 |
+
+Airflow containers:
+
+| Container | Responsibility |
+| --------- | -------------- |
+| `fintech-airflow-init` | One-time DB migration (exits after completing) |
+| `fintech-airflow-postgres` | Airflow metadata database |
+| `fintech-airflow-api-server` | FastAPI server (UI + Execution API) on port `8080` |
+| `fintech-airflow-scheduler` | Reads DAGs, schedules and executes task instances |
+| `fintech-airflow-dag-processor` | Parses/serializes DAG files for the scheduler |
+
+**Airflow UI:** http://localhost:8080 \
+**Credentials:** the username/password pair defined by `AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS` in `infra/docker/docker-compose.yml` (default `admin:admin`).
+
+## The Airflow DAG
+
+File: `services/orchestrator/dags/fintech_dbt_pipeline.py`
+
+```python
+with DAG(
+    dag_id="fintech_dbt_pipeline",
+    schedule="*/5 * * * *",
+    catchup=False,
     ...
-}
+):
+    start_pipeline_task = PythonOperator(task_id="start_pipeline", python_callable=start_pipeline)
+    dbt_build = BashOperator(task_id="dbt_build", bash_command="cd /opt/airflow/dbt && dbt build --profiles-dir /opt/airflow/dbt")
 
-The producer does not communicate directly with Snowflake.
+    start_pipeline_task >> dbt_build
+```
 
-Its responsibility is only to generate transaction data and place the files into Amazon S3.
+- **Schedule:** every 5 minutes
+- **catchup:** disabled (no backfill from `start_date`)
+- **Tasks:** `start_pipeline` (hello-world check) then `dbt_build` (runs the dbt project)
+- **Retries:** 2 retries, 2-minute delay (handles transient Snowflake/network blips)
 
+The `dbt_build` task runs `dbt build`, which builds dbt's internal DAG (`stg_transactions → int_transactions → fct_fraud_transactions`) and runs its data tests interleaved. The dbt project is mounted into the containers at `/opt/airflow/dbt`.
 
-### 2. Amazon S3
+## dbt models
 
-S3 acts as the raw data landing zone.
+| Layer | Model | Purpose |
+| ----- | ----- | ------- |
+| Staging | `stg_transactions` | Clean, typed view over `RAW.TRANSACTIONS` |
+| Intermediate | `int_transactions` | Adds derived fields: `fraud_status`, `transaction_amount_category` |
+| Marts | `fct_fraud_transactions` | Aggregated fact: counts, totals, averages, and fraud amounts by type/category/status |
 
-Bucket:
+Models are materialized as tables (`+materialized: table`) with per-layer schemas `STAGING`, `INTERMEDIATE`, and `MARTS` (via the `generate_schema_name` macro).
 
-fintech-data-platform-azam-2026
+## Architecture deep-dive / runbooks
 
-Transaction files are stored under:
+Detailed setup and troubleshooting guides live in `docs/`:
 
-raw/transactions/
+- `docs/orchestration/airflow.md` — Airflow orchestration details, DAG config, and troubleshooting
+- `docs/ingestion/kafka.md` — Kafka producer/consumer integration
+- `docs/cloud/s3-snowflake-storage-integration.md` — S3 ↔ Snowflake storage integration runbook
+- `docs/cloud/snowpipe-notification-integration.md` — event-driven Snowpipe auto-ingest runbook
 
-Example:
+## Useful commands
 
-s3://fintech-data-platform-azam-2026/raw/transactions/2026/08/28/new_transactions.jsonl
+### Makefile
 
-S3 has two responsibilities:
+Most day-to-day tasks are wrapped in the `Makefile`. Run `make help` to list them.
 
-1. Store the raw transaction files.
-2. Generate an ObjectCreated event when a new transaction file arrives.
+```bash
+make up                # start whole stack (ingest + Airflow)
+make ingest-up         # start ingest only
+make orchestrate-up    # start Airflow only
+make logs              # tail all logs
+make dbt-build         # run dbt locally
+make validate          # validate compose file
+```
 
-S3 does not transform the JSONL data.
+### Docker Compose
 
+```bash
+# Overall status
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate ps
 
-### 3. S3 Event Notification
+# Scheduler logs
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  logs airflow-scheduler --tail 100
 
-The S3 event notification watches the transaction location for new objects.
+# List / inspect DAGs
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  exec airflow-scheduler airflow dags list
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  exec airflow-scheduler airflow dags details fintech_dbt_pipeline
 
-When a new file arrives:
+# Pause / unpause a pipeline
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  exec airflow-scheduler airflow dags pause fintech_dbt_pipeline
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  exec airflow-scheduler airflow dags unpause fintech_dbt_pipeline
 
-S3
- |
- | ObjectCreated
- v
-SNS Topic
+# Run a task directly (bypass schedule)
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  exec airflow-scheduler airflow tasks test fintech_dbt_pipeline dbt_build 2026-08-31
 
-The event contains information such as the bucket and object key.
+# List completed runs
+docker compose -f infra/docker/docker-compose.yml --profile orchestrate \
+  exec airflow-scheduler airflow dags list-runs fintech_dbt_pipeline
 
-The event notification does not process the transaction data itself.
+# Ingest logs
+docker compose -f infra/docker/docker-compose.yml logs -f producer consumer
+```
 
-Its job is to tell the downstream notification system:
+## Notes and known considerations
 
-"A new file has arrived."
+- **Eventual consistency:** the Airflow DAG runs on a fixed 5-minute schedule with no freshness gate ahead of `dbt_build`. A transaction that lands in Snowflake just before a run may not appear in the marts until the next run. See `docs/orchestration/airflow.md` for the discussion.
+- **Source data quality:** raw PaySim data once contained NULLs that broke dbt `not_null` tests; invalid rows were removed from the source rather than quarantined. A future improvement is to split RAW into valid/quarantine paths.
+- **Secrets** (`AWS_ACCESS_KEY_ID`, `SNOWFLAKE_PASSWORD`, etc.) live only in `.env` (gitignored) and are injected via `env_file` into the containers.
 
+## Extending
 
-### 4. Amazon SNS
+The clean separation between layers means you can change each piece independently:
 
-SNS acts as the notification layer between S3 and Snowflake.
-
-Topic:
-
-fintech-snowpipe-notification
-
-ARN:
-
-arn:aws:sns:ap-south-1:839553328980:fintech-snowpipe-notification
-
-SNS receives the S3 ObjectCreated notification and makes that notification available to Snowpipe.
-
-SNS does not read the JSONL file.
-
-SNS does not transform transaction records.
-
-Its job is event delivery.
-
-
-### 5. Snowflake Notification Integration
-
-Snowflake object:
-
-FINTECH.RAW.FINTECH_S3_NOTIFICATION
-
-The notification integration tells Snowflake how it interacts with the AWS notification infrastructure.
-
-It contains:
-
-AWS_SNS_TOPIC_ARN
-    |
-    | Identifies WHERE the notification is sent
-
-AWS_SNS_ROLE_ARN
-    |
-    | Identifies WHICH AWS IAM role Snowflake uses
-
-The integration connects Snowflake's notification mechanism to the AWS SNS topic.
-
-It is configuration and authorization, not a data-processing component.
-
-
-### 6. IAM Role for Notification
-
-Role:
-
-fintech-snowpipe-notification-role
-
-Its purpose is to give Snowflake the required AWS permission for the SNS notification operation.
-
-Current permission:
-
-sns:Publish
-
-Resource:
-
-arn:aws:sns:ap-south-1:839553328980:fintech-snowpipe-notification
-
-The permission is scoped to this specific SNS topic.
-
-The role does not provide unrestricted SNS access.
-
-
-### 7. Snowflake External Stage
-
-Snowflake object:
-
-FINTECH.RAW.TRANSACTIONS_CRED_STAGE
-
-The stage represents the S3 location inside Snowflake.
-
-It points to:
-
-s3://fintech-data-platform-azam-2026/raw/transactions/
-
-The stage is the bridge between Snowflake and the files stored in S3.
-
-It does not copy the data into Snowflake by itself.
-
-It provides Snowflake with a reference to the external files.
-
-
-### 8. Snowflake File Format
-
-Snowflake object:
-
-FINTECH.RAW.JSONL_FORMAT
-
-Type:
-
-JSON
-
-The file format defines how Snowflake interprets the files stored in the stage.
-
-It contains parsing configuration such as:
-
-- File type
-- Date and time formats
-- Compression
-- NULL handling
-- UTF-8 handling
-- Multiline behavior
-- Duplicate-key handling
-
-The stage references this file format:
-
-TRANSACTIONS_CRED_STAGE
-        |
-        v
-JSONL_FORMAT
-
-Therefore the Snowpipe COPY statement does not need to repeatedly specify the JSON file format.
-
-
-### 9. Snowpipe
-
-Snowflake object:
-
-FINTECH.RAW.TRANSACTIONS_PIPE
-
-Snowpipe is responsible for automatically loading newly arrived files into the target Snowflake table.
-
-Its COPY INTO definition performs two jobs:
-
-1. Read the JSON records from the stage.
-2. Transform JSON fields into the target table columns.
-
-For example:
-
-$1:step::NUMBER
-$1:type::VARCHAR
-$1:amount::NUMBER(18,2)
-
-Here:
-
-$1
-
-represents the JSON record.
-
-$1:amount
-
-extracts the amount field.
-
-::NUMBER(18,2)
-
-converts it into the required Snowflake data type.
-
-The result is inserted into:
-
-FINTECH.RAW.TRANSACTIONS
-
-
-### 10. Snowflake Target Table
-
-Table:
-
-FINTECH.RAW.TRANSACTIONS
-
-This is the structured destination for the transaction data.
-
-Snowpipe converts the semi-structured JSON records into the table's relational columns.
-
-Example:
-
-JSON:
-
-{
-    "step": 2,
-    "type": "PAYMENT",
-    "amount": 2500.00
-}
-
-becomes:
-
-STEP   = 2
-TYPE   = PAYMENT
-AMOUNT = 2500.00
-
-
-## Complete Interaction
-
-When a new transaction file arrives:
-
-1. The data producer creates a JSONL file.
-
-2. The file is uploaded to:
-
-   Amazon S3
-   |
-   raw/transactions/
-
-3. S3 stores the raw file.
-
-4. S3 generates an ObjectCreated event.
-
-5. The S3 event is sent to:
-
-   Amazon SNS
-   |
-   fintech-snowpipe-notification
-
-6. Snowflake's notification integration provides the AWS/Snowflake connection required for the notification mechanism.
-
-7. Snowpipe receives the notification that a new file is available.
-
-8. Snowpipe accesses the external stage.
-
-9. The stage points Snowflake to the S3 file.
-
-10. The stage uses JSONL_FORMAT to interpret the file.
-
-11. Snowpipe executes its COPY INTO definition.
-
-12. JSON fields are extracted and cast to the target data types.
-
-13. The transformed records are inserted into:
-
-   FINTECH.RAW.TRANSACTIONS
-
-
-## Responsibility Boundaries
-
-Data Producer
-    -> Generate transaction data
-
-S3
-    -> Store raw files
-    -> Detect new objects
-
-S3 Event Notification
-    -> Generate delivery event
-
-SNS
-    -> Deliver the event
-
-Notification Integration
-    -> Configure Snowflake's AWS notification connection
-
-IAM Role
-    -> Authorize the required AWS operation
-
-External Stage
-    -> Represent the S3 location inside Snowflake
-
-File Format
-    -> Define how Snowflake interprets JSONL
-
-Snowpipe
-    -> Detect/process new files
-    -> Execute COPY transformation
-
-RAW.TRANSACTIONS
-    -> Store structured transaction records
-
-
+- **Add a source** → Kafka producer/consumer, S3 prefix, or Snowpipe changes
+- **Add a model** → dbt `models/` (staging → intermediate → marts), then the Airflow `dbt_build` task runs it automatically
+- **Change cadence** → the Airflow DAG `schedule` and/or task retries
+- **Add an ingest service** → drop it under `services/ingest/` and declare it in `infra/docker/docker-compose.yml`
