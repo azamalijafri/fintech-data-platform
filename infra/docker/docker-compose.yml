@@ -102,6 +102,9 @@ services:
     build:
       context: ../../services/orchestrator
       dockerfile: Dockerfile
+      args:
+        AIRFLOW_UID: "${AIRFLOW_UID:-1000}"
+        AIRFLOW_GID: "${AIRFLOW_GID:-1000}"
     container_name: fintech-airflow-init
     profiles: ["orchestrate"]
     env_file:
@@ -130,6 +133,9 @@ services:
     build:
       context: ../../services/orchestrator
       dockerfile: Dockerfile
+      args:
+        AIRFLOW_UID: "${AIRFLOW_UID:-1000}"
+        AIRFLOW_GID: "${AIRFLOW_GID:-1000}"
     container_name: fintech-airflow-api-server
     profiles: ["orchestrate"]
     env_file:
@@ -163,6 +169,9 @@ services:
     build:
       context: ../../services/orchestrator
       dockerfile: Dockerfile
+      args:
+        AIRFLOW_UID: "${AIRFLOW_UID:-1000}"
+        AIRFLOW_GID: "${AIRFLOW_GID:-1000}"
     container_name: fintech-airflow-dag-processor
     profiles: ["orchestrate"]
 
@@ -191,6 +200,9 @@ services:
     build:
       context: ../../services/orchestrator
       dockerfile: Dockerfile
+      args:
+        AIRFLOW_UID: "${AIRFLOW_UID:-1000}"
+        AIRFLOW_GID: "${AIRFLOW_GID:-1000}"
     container_name: fintech-airflow-scheduler
     profiles: ["orchestrate"]
     env_file:

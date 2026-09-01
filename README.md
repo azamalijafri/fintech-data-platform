@@ -69,7 +69,6 @@ fintech-data-platform/
 ├── Makefile                           # common dev tasks
 ├── pyproject.toml                     # shared Python package definition
 ├── .python-version
-├── .github/workflows/ci.yml
 └── .env.example
 ```
 
